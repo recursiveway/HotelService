@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Card Stack with Re-entry</title>
+    <style>
+        :root {
+            --tilt: 4deg; /* The angle of the 'messy' stack */
+            --card-width: 320px;
+            --card-height: 420px;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f4f1ea;
+            font-family: 'Georgia', serif;
+            overflow: hidden;
+        }
+
+        .carousel-container {
+            position: relative;
+            width: var(--card-width);
+            height: var(--card-height);
+            perspective: 1000px;
+            margin-bottom: 60px;
+        }
+
+        .card {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: white;
+            border: 2px solid #1a3c34;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            box-sizing: border-box;
+            
+            /* IMPORTANT: We control transition explicitly in the states below 
+               to prevent the card from 'floating' across the screen during the Snap phase.
+            */
+            transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+            will-change: transform;
+            backface-visibility: hidden;
+        }
+
+        .card img {
+            width: 100%;
+            height: 220px;
+            object-fit: cover;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            background: #eee;
+        }
+
+        /* --- STATE 1: TOP CARD (Visible, Tilted Left) --- */
+        .card[data-state="top"] {
+            z-index: 10;
+            transform: rotate(calc(var(--tilt) * -1)); /* -4deg */
+        }
+
+        /* --- STATE 2: BOTTOM CARD (Peeking, Tilted Right) --- */
+        .card[data-state="bottom"] {
+            z-index: 5;
+            /* Tilted right, slightly offset to show "ears" */
+            transform: rotate(var(--tilt)) translate(10px, 5px) scale(0.98);
+        }
+
+        /* --- STATE 3: EXITING (The Animation Out) --- */
+        .card[data-state="exiting"] {
+            z-index: 20; /* Keep it on top while leaving */
+            /* 1. Rotate Left (keep existing angle)
+               2. Translate Left (Slide along that angle)
+            */
+            transform: rotate(calc(var(--tilt) * -1)) translateX(-150%);
+            opacity: 1; /* Keep visible while sliding out */
+        }
+
+        /* --- STATE 4: SNAP (Instant Reset) --- */
+        /* This state happens instantly while the card is off-screen */
+        .card[data-state="snap"] {
+            transition: none !important; /* NO ANIMATION */
+            z-index: 1; /* Drop to bottom layer */
+            opacity: 0; /* Hide it just in case */
+            /* Move it to the Right side (or keep it Left if you want it to slide back in from Left) */
+            /* Here, we keep it far left but change the tilt to Right to match the bottom stack */
+            transform: rotate(var(--tilt)) translateX(-150%);
+        }
+
+        /* --- STATE 5: RE-ENTERING (The Return) --- */
+        /* This slides the card from off-screen back to the "Bottom" position */
+        .card[data-state="re-entering"] {
+            z-index: 1; /* Underneath everything */
+            transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+            /* Slide to the resting 'Bottom' position */
+            transform: rotate(var(--tilt)) translate(10px, 5px) scale(0.98);
+            opacity: 1;
+        }
+
+        button {
+            padding: 15px 40px;
+            background: #1a3c34;
+            color: white;
+            border: none;
+            border-radius: 30px;
+            font-size: 1rem;
+            cursor: pointer;
+            z-index: 100;
+        }
+        button:disabled { background: #888; cursor: wait; }
+
+    </style>
+</head>
+<body>
+
+    <div class="carousel-container" id="stack">
+        </div>
+
+    <button onclick="triggerAnimation()" id="nextBtn">Next Card</button>
+
+    <script>
+        const data = [1, 2, 3, 4]; // We can have N cards
+        const stack = document.getElementById('stack');
+        let isAnimating = false;
+
+        // Initial Render
+        function init() {
+            stack.innerHTML = '';
+            data.forEach((i, index) => {
+                const el = document.createElement('div');
+                el.className = 'card';
+                el.innerHTML = `<img src="https://picsum.photos/300/200?random=${i}"><h3>Card ${i}</h3><p>Wedding testimonial text goes here...</p>`;
+                
+                // Assign Initial Positions
+                if(index === 0) el.setAttribute('data-state', 'top');
+                else if(index === 1) el.setAttribute('data-state', 'bottom');
+                else el.setAttribute('data-state', 're-entering'); // Others sit behind
+                
+                stack.appendChild(el);
+            });
+        }
+
+        function triggerAnimation() {
+            if (isAnimating) return;
+            isAnimating = true;
+            document.getElementById('nextBtn').disabled = true;
+
+            const cards = document.querySelectorAll('.card');
+            
+            // 1. Identify roles based on current DOM order
+            // In this logic, DOM Order = Stack Order. 
+            // cards[0] is Top, cards[1] is Bottom, cards[2] is behind.
+            const topCard = cards[0];
+            const bottomCard = cards[1];
+            const incomingCard = cards[2]; // The one waiting behind
+
+            // ---------------- STEP A: Slide OUT ----------------
+            topCard.setAttribute('data-state', 'exiting'); // Slide Left
+
+            // ---------------- STEP B: Slide UP ----------------
+            // The card below becomes the new Top
+            if (bottomCard) bottomCard.setAttribute('data-state', 'top');
+            // The card behind becomes the new Bottom (Peeking)
+            if (incomingCard) incomingCard.setAttribute('data-state', 'bottom');
+
+            // ---------------- STEP C: The Re-Entry Logic ----------------
+            setTimeout(() => {
+                // 1. The card is now off-screen.
+                // 2. Instantly SNAP it to the "back of line" position (low z-index)
+                //    We change tilt here from Left to Right instantly while hidden.
+                topCard.setAttribute('data-state', 'snap');
+
+                // 3. Force a browser Reflow (layout update) so the 'snap' applies instantly
+                //    without animation before we trigger the next move.
+                void topCard.offsetWidth; 
+
+                // 4. Move the DOM element to the end of the list
+                //    This logically puts it at the bottom of the pile.
+                stack.appendChild(topCard);
+
+                // 5. Set it to the 're-entering' or 'bottom' state 
+                //    so it settles into the stack for the next turn.
+                //    (Since it's now index 2 or 3, it acts as the 'waiting' card)
+                topCard.setAttribute('data-state', 're-entering');
+
+                isAnimating = false;
+                document.getElementById('nextBtn').disabled = false;
+
+            }, 600); // Wait for the exit slide to finish
+        }
+
+        init();
+    </script>
+</body>
+</html>
